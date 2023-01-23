@@ -233,6 +233,10 @@ pub fn length2<const N: usize>(v: Vector<N, f32>) -> f32 {
     v.vals.iter().map(|&v| v * v).sum::<f32>()
 }
 
+pub fn abs<const N: usize>(v: Vector<N, f32>) -> Vector<N, f32> {
+    Vector::<N, f32>::new(v.vals.map(|v| v.abs()))
+}
+
 pub fn dot<const N: usize>(a: Vector<N, f32>, b: Vector<N, f32>) -> f32 {
     let mut sum = 0.0;
     for i in 0..N {
@@ -252,6 +256,20 @@ pub fn cross(a: Vector<3, f32>, b: Vector<3, f32>) -> Vector<3, f32> {
 
 pub fn reflect(dir: Vector<3, f32>, normal: Vector<3, f32>) -> Vector<3, f32> {
     dir - 2.0 * dot(dir, normal) * normal
+}
+
+pub fn refract(incident: Vector<3, f32>, normal: Vector<3, f32>, ior_1: f32, ior_2: f32) -> Option<Vector<3, f32>> {
+    let eta = ior_1 / ior_2;
+    let cos_i = -dot(normal, incident);
+    let sin_t2 = (eta * eta * (1.0 - cos_i * cos_i)).max(0.0);
+
+    if sin_t2 >= 1.0 {
+        // total internal reflection
+        None
+    } else {
+        let cos_t = (1.0 - sin_t2).sqrt();
+        Some(normalize(eta * incident + (eta * cos_i - cos_t) * normal))
+    }
 }
 
 pub fn rem(v: Vector<3, f32>, m: Vector<3, f32>) -> Vector<3, f32> {

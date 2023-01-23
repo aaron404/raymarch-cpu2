@@ -1,23 +1,23 @@
 #![feature(const_fn_floating_point_arithmetic)]
 #![feature(slice_flatten)]
 
-use core::time;
+use core::{time};
 use std::{f32::consts::PI, ops::Sub, time::{Duration, Instant}};
 
-use image::{ImageBuffer, Rgb};
+use image::{ImageBuffer, Rgb, codecs::hdr::Rgbe8Pixel, imageops::FilterType::Gaussian, RgbImage, DynamicImage};
 
 mod vector;
 
 use rayon::prelude::{IntoParallelRefMutIterator, IndexedParallelIterator, ParallelIterator};
 use vector::*;
 
-const WIDTH: u32 = 1024;
-const HEIGHT: u32 = 1024;
+const WIDTH: u32 = 960;
+const HEIGHT: u32 = 540;
 
-const MAX_STEPS: u32 = 320;
+const MAX_STEPS: u32 = 100;
 const MIN_DIST: f32 = 4.0;
 const MAX_DIST: f32 = 10.0;
-const SURF_DIST: f32 = 0.00025;
+const SURF_DIST: f32 = 0.0025;
 const EPSILON: f32 = SURF_DIST * 2.0;
 
 const UP: Vector<3, f32> = vec3(0.0, 1.0, 0.0);
@@ -98,11 +98,8 @@ fn sdf_gemstone(p: Vector<3, f32>, gem: Gem) -> f32 {
     dist = dist.max(sdf_ncone(p, 16, 3.94, 6.0/96.0*360.0, 180.0 - 35.0));
     dist = dist.max(sdf_ncone(p, 16, 3.37, 0.0/96.0*360.0, 180.0 - 24.0));
 
-    // dist = dist.max(sdf_ncone(p, 8, 3.0, 0.0, 38.0));
-    // dist = dist.max(sdf_ncone(p, 8, 1.8375, 6.0/96.0*360.0, 24.0));
-    // dist = dist.max(sdf_ncone(p, 4, 1.35, 0.0, 16.0));
-    // dist = dist.max(sdf_ncone(p, 8, 3.0, 0.0, 180.0 - 38.0));
     dist = dist.max(sdf_sphere(p, 7.0));
+    // dist = sdf_sphere(p, 7.0);
 
     dist
 }
@@ -142,43 +139,40 @@ fn ray_sphere_intersection(ray_origin: Vector<3, f32>, ray_dir: Vector<3, f32>, 
     }
 }
 
-fn ray_march(ray_origin: Vector<3, f32>, ray_dir: Vector<3, f32>) -> Vector<3, f32> {
-    let mut p = ray_origin + MIN_DIST * ray_dir;
+fn ray_march(ray_origin: Vector<3, f32>, dir: Vector<3, f32>) -> Vector<3, f32> {
+    let mut p = ray_origin + MIN_DIST * dir;
     let mut num_bounces = 0;
+    let mut ray_dir = dir;
 
+    let mut fresnel = None;
+    let mut refl = vec3(0.0, 1.0, 0.0);
 
+    // trace initial hit
     let mut i = 0;
     while i < MAX_STEPS {
         let dist = get_dist(p);
         p += ray_dir * dist;
 
-        // if i == 1 {
-        //     return vec3(dist, dist, dist);
-        // }
-        
-        // trace initial hit
         if dist < SURF_DIST {
             // break;
             num_bounces += 1;
             let normal = get_normal(p);
-            // return normal * - 1.0;
 
+            fresnel = Some(f32::powf(1.0 + dot(ray_dir, normal), 5.0));
 
-            let fresnel = f32::powf(1.0 + dot(ray_dir, normal), 5.0);
+            refl = reflect(ray_dir, normal);
+            refl = ray_sphere_intersection(p, refl, 20.0).unwrap();
 
-            let refl = reflect(ray_dir, normal);
+            ray_dir = refract(ray_dir, normal, 1.0, 1.459).unwrap();
+            p -= normal * EPSILON;
+            break;
 
-            if let Some(vec) = ray_sphere_intersection(p, refl, 20.0) {
-                return rem(vec / 4.0, vec3(1.0, 1.0, 1.0)) * fresnel;
-            } else {
-                return vec3(0.0, 0.0, 1.0);
-            }
-
-            // return ray_dir;
-            return vec3(fresnel, fresnel, fresnel);
+            // if let Some(vec) = ray_sphere_intersection(p, ray_dir, 20.0) {
+            //     return rem(vec / 4.0, vec3(1.0, 1.0, 1.0));
+            // } else {
+            //     return vec3(0.0, 0.0, 1.0);
+            // }
         }
-
-
 
         if dist > MAX_DIST {
             if let Some(vec) = ray_sphere_intersection(p, ray_dir, 20.0) {
@@ -190,8 +184,40 @@ fn ray_march(ray_origin: Vector<3, f32>, ray_dir: Vector<3, f32>) -> Vector<3, f
 
         i += 1;
     }
+    
+    // if let Some(f) = fresnel {
+    //     return vec3(f, f, f);
+    // }
 
-    vec3(1.0, 1.0, 1.0) * i as f32 / MAX_STEPS as f32
+    // i = 0;
+    while i < MAX_STEPS {
+        let dist = get_dist(p);
+        p += ray_dir * dist.abs();
+        if dist.abs() < SURF_DIST {
+            num_bounces += 1;
+            let normal = get_normal(p);
+            if let Some(refr) = refract(ray_dir, -1.0 * normal, 1.459, 1.0) {
+                ray_dir = refr;
+                break;
+            } else {
+                ray_dir = reflect(ray_dir, -1.0 * normal);
+                p += normal * EPSILON;
+            }
+        }
+
+        i += 1;
+    }
+
+    if let Some(vec) = ray_sphere_intersection(p, ray_dir, 20.0) {
+        if let Some(f) = fresnel {
+            return vec3(f, f, f);
+        }
+        return vec3(0.0, 0.0, 0.0);
+    } else {
+        return vec3(0.0, 0.0, 1.0);
+    }
+
+    // vec3(1.0, 1.0, 1.0) * i as f32 / MAX_STEPS as f32
 }
 
 fn main() {
@@ -235,7 +261,7 @@ fn main() {
     
                         let mut col = vec3(0.0, 0.0, 0.0);
     
-                        let ray_dir = normalize(uv.x() * cam_right + uv.y() * cam_up + look_dir);
+                        let ray_dir = normalize(uv.x() * cam_right / 1.5 + uv.y() / 1.5 * cam_up + look_dir);
     
                         let color = ray_march(ray_origin, ray_dir);
                         *pixel = color.to_rgb_u8();
@@ -244,10 +270,21 @@ fn main() {
         
         println!("Time: {:?}", Instant::now() - t0);
     
-        image::save_buffer(format!("out{:03}.png", theta), buffer.flatten().flatten(), WIDTH as u32, HEIGHT as u32, image::ColorType::Rgb8).expect("failed to save img");
+        // image::save_buffer(format!("out{:03}.png", theta), buffer.flatten().flatten(), WIDTH as u32, HEIGHT as u32, image::ColorType::Rgb8).expect("failed to save img");
+        // let img = image::ImageBuffer::<Rgb<u8>, &[u8]>::from_raw(WIDTH, HEIGHT, buffer.flatten().flatten());
+        let img = RgbImage::from_raw(WIDTH, HEIGHT, buffer.flatten().flatten().to_vec()).unwrap();
+        // let img = image::load_from_memory_with_format(buffer.flatten().flatten().as_slice(), image::ImageFormat::Png).unwrap();
+        // img.resize(img.width() / 2, img.height() / 2, Gaussian);
+        let img = DynamicImage::ImageRgb8(img);
+        println!("w {} h {}", img.width(), img.height());
+        let scaled = img.resize(img.width() / 2, img.height() / 2, Gaussian);
+        scaled.save("scaled.png").expect("Failed to save image");
     }
 
-    // image::open("out.png").unwrap().resize(WIDTH / 2, HEIGHT / 2, image::imageops::FilterType::Gaussian).save("out_scaled.png").unwrap();
+    // image::open("out.png")
+    //     .unwrap()
+    //     .resize(WIDTH / 2, HEIGHT / 2, image::imageops::FilterType::Gaussian)
+    //     .save("out_scaled.png").unwrap();
     // image::open("out_scaled.png").unwrap().resize(WIDTH / 4, HEIGHT / 4, image::imageops::FilterType::Gaussian).save("out_scaled2.png").unwrap();
 
     println!("Hello, world!");
